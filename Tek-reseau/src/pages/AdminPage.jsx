@@ -1,5 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Plus, Calendar, Clock, Check, X, LogOut, Users, Trash } from 'lucide-react';
+import { Upload, Plus, Calendar, Clock, Check, X, LogOut, Users, Trash, Activity, FileText } from 'lucide-react';
+import * as pdfjsLib from 'pdfjs-dist';
+import './AdminPage.css';
+
+// Set up worker for PDF.js - using a CDN worker is often easier in these environments
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 const AdminPage = () => {
     const [members, setMembers] = useState(() => {
@@ -23,6 +28,7 @@ const AdminPage = () => {
     });
 
     const [rawUpload, setRawUpload] = useState('');
+    const [isProcessingPdf, setIsProcessingPdf] = useState(false);
 
     useEffect(() => {
         localStorage.setItem('tek_reseau_members', JSON.stringify(members));
@@ -44,6 +50,41 @@ const AdminPage = () => {
         setMembers([...members, ...newMembers]);
         setRawUpload('');
         alert('Membres ajoutés avec succès !');
+    };
+
+    const handlePdfImport = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        setIsProcessingPdf(true);
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            let fullText = '';
+
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const textContent = await page.getTextContent();
+                const pageText = textContent.items.map(item => item.str).join(' ');
+                fullText += pageText + '\n';
+            }
+
+            // Cleanup text: remove multiple spaces, handle line breaks
+            // This is a naive implementation that assumes names are distinct or separated
+            const potentialMembers = fullText
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 3); // Basic filter for short/junk lines
+
+            setRawUpload(prev => prev + (prev ? '\n' : '') + potentialMembers.join('\n'));
+            alert('Texte extrait du PDF ! Vérifiez la liste ci-dessous avant d\'importer.');
+        } catch (error) {
+            console.error('Erreur PDF:', error);
+            alert('Erreur lors de la lecture du PDF.');
+        } finally {
+            setIsProcessingPdf(false);
+            e.target.value = '';
+        }
     };
 
     const handleCreateActivity = () => {
@@ -70,9 +111,7 @@ const AdminPage = () => {
         if (status === 'abandon') {
             const confirmAbandon = window.confirm(`Voulez-vous vraiment retirer définitivement ${members.find(m => m.id === memberId)?.name} de l'association ?`);
             if (confirmAbandon) {
-                // Remove from members
                 setMembers(members.filter(m => m.id !== memberId));
-                // Also remove from all current activities attendance
                 setActivities(activities.map(act => {
                     const newAttendance = { ...act.attendance };
                     delete newAttendance[memberId];
@@ -108,6 +147,44 @@ const AdminPage = () => {
         }
     };
 
+    const addMemberToActivity = (member) => {
+        if (!currentActivity) return;
+
+        const updatedActivities = activities.map(act => {
+            if (act.id === currentActivity.id) {
+                return {
+                    ...act,
+                    attendance: { ...act.attendance, [member.id]: 'none' }
+                };
+            }
+            return act;
+        });
+
+        setActivities(updatedActivities);
+        setCurrentActivity({
+            ...currentActivity,
+            attendance: { ...currentActivity.attendance, [member.id]: 'none' }
+        });
+    };
+
+    const removeMemberFromActivity = (memberId) => {
+        if (!currentActivity) return;
+
+        const updatedActivities = activities.map(act => {
+            if (act.id === currentActivity.id) {
+                const newAttendance = { ...act.attendance };
+                delete newAttendance[memberId];
+                return { ...act, attendance: newAttendance };
+            }
+            return act;
+        });
+
+        setActivities(updatedActivities);
+        const newAttendance = { ...currentActivity.attendance };
+        delete newAttendance[memberId];
+        setCurrentActivity({ ...currentActivity, attendance: newAttendance });
+    };
+
     return (
         <div className="adminpage animate-fade">
             <header className="admin-header">
@@ -119,22 +196,42 @@ const AdminPage = () => {
                 {/* Members Management */}
                 <section className="glass-card admin-section">
                     <h2><Users size={24} className="icon-blue" /> Gestion des Membres ({members.length})</h2>
+
                     <div className="upload-container">
-                        <label>Ajouter des membres (un nom par ligne)</label>
+                        <div className="upload-header">
+                            <label>Ajouter des membres</label>
+                            <div className="upload-actions">
+                                <label className="btn-secondary btn-small file-input-label">
+                                    <FileText size={16} />
+                                    {isProcessingPdf ? 'Extraction...' : 'PDF'}
+                                    <input
+                                        type="file"
+                                        accept=".pdf"
+                                        onChange={handlePdfImport}
+                                        style={{ display: 'none' }}
+                                        disabled={isProcessingPdf}
+                                    />
+                                </label>
+                            </div>
+                        </div>
                         <textarea
                             value={rawUpload}
                             onChange={(e) => setRawUpload(e.target.value)}
-                            placeholder="Ex: ALLADASSI Marc-Aurel"
+                            placeholder="Un nom par ligne..."
                         />
                         <button className="btn-primary" onClick={handleUploadMembers}>
                             <Upload size={18} /> Importer la liste
                         </button>
                     </div>
+
                     <div className="members-list">
+                        {members.length === 0 && <p className="empty-msg">Aucun membre.</p>}
                         {members.map(m => (
                             <div key={m.id} className="member-item">
                                 <span>{m.name}</span>
-                                <button className="btn-icon" onClick={() => setMembers(members.filter(mem => mem.id !== m.id))}>
+                                <button className="btn-icon" onClick={() => {
+                                    if (window.confirm('Supprimer ce membre ?')) setMembers(members.filter(mem => mem.id !== m.id));
+                                }}>
                                     <Trash size={14} />
                                 </button>
                             </div>
@@ -162,53 +259,113 @@ const AdminPage = () => {
                                 <div className="activity-stats">
                                     {Object.values(act.attendance).filter(v => v === 'present').length} Présents
                                 </div>
+                                <button className="btn-icon trash-activity" onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (window.confirm('Supprimer cette activité ?')) setActivities(activities.filter(a => a.id !== act.id));
+                                }}>
+                                    <Trash size={14} />
+                                </button>
                             </div>
                         ))}
                     </div>
                 </section>
             </div>
 
-            {/* Attendance Modal / View */}
+            {/* Attendance View */}
             {currentActivity && (
-                <div className="attendance-view glass-card animate-fade">
-                    <div className="attendance-header">
-                        <h3>Présence : {currentActivity.name}</h3>
-                        <button className="btn-secondary" onClick={() => setCurrentActivity(null)}>Fermer</button>
-                    </div>
-                    <div className="attendance-list">
-                        <div className="attendance-row header-row">
-                            <span>Étudiant</span>
-                            <div className="action-labels">
-                                <span>Présent</span>
-                                <span>Absent</span>
-                                <span>Abandon</span>
+                <div className="modal-overlay">
+                    <div className="attendance-view glass-card animate-fade">
+                        <div className="attendance-header">
+                            <div>
+                                <h3>{currentActivity.name}</h3>
+                                <p className="date-subtitle">{currentActivity.date} • {currentActivity.startTime} - {currentActivity.endTime}</p>
+                            </div>
+                            <button className="btn-secondary" onClick={() => setCurrentActivity(null)}>
+                                <X size={18} /> Fermer
+                            </button>
+                        </div>
+
+                        <div className="attendance-registration">
+                            <label>Inscrire un membre à cette séance :</label>
+                            <div className="registration-controls">
+                                <select
+                                    className="member-select"
+                                    onChange={(e) => {
+                                        const member = members.find(m => m.id === e.target.value);
+                                        if (member) addMemberToActivity(member);
+                                        e.target.value = "";
+                                    }}
+                                    value=""
+                                >
+                                    <option value="" disabled>Sélectionner un membre...</option>
+                                    {members
+                                        .filter(m => !currentActivity.attendance[m.id])
+                                        .map(m => (
+                                            <option key={m.id} value={m.id}>{m.name}</option>
+                                        ))
+                                    }
+                                </select>
                             </div>
                         </div>
-                        {members.map(m => (
-                            <div key={m.id} className="attendance-row">
-                                <span className="student-name">{m.name}</span>
-                                <div className="attendance-actions">
-                                    <button
-                                        className={`btn-check ${currentActivity.attendance[m.id] === 'present' ? 'active-present' : ''}`}
-                                        onClick={() => updateAttendance(currentActivity.id, m.id, 'present')}
-                                    >
-                                        <Check size={18} />
-                                    </button>
-                                    <button
-                                        className={`btn-check ${currentActivity.attendance[m.id] === 'absent' ? 'active-absent' : ''}`}
-                                        onClick={() => updateAttendance(currentActivity.id, m.id, 'absent')}
-                                    >
-                                        <X size={18} />
-                                    </button>
-                                    <button
-                                        className={`btn-check ${currentActivity.attendance[m.id] === 'abandon' ? 'active-abandon' : ''}`}
-                                        onClick={() => updateAttendance(currentActivity.id, m.id, 'abandon')}
-                                    >
-                                        <LogOut size={18} />
-                                    </button>
-                                </div>
+
+                        <div className="attendance-list">
+                            <div className="attendance-summary">
+                                <span className="stat-tag present">Présents: {Object.values(currentActivity.attendance).filter(v => v === 'present').length}</span>
+                                <span className="stat-tag absent">Absents: {Object.values(currentActivity.attendance).filter(v => v === 'absent').length}</span>
+                                <span className="stat-tag total">Total inscrits: {Object.keys(currentActivity.attendance).length}</span>
                             </div>
-                        ))}
+
+                            <div className="attendance-scroll-area">
+                                {Object.keys(currentActivity.attendance).length === 0 ? (
+                                    <p className="empty-msg">Personne n'est inscrit à cette séance.</p>
+                                ) : (
+                                    Object.keys(currentActivity.attendance).map(memberId => {
+                                        const member = members.find(m => m.id === memberId);
+                                        if (!member) return null;
+                                        const status = currentActivity.attendance[memberId];
+
+                                        return (
+                                            <div key={memberId} className={`attendance-card ${status}`}>
+                                                <div className="member-info">
+                                                    <span className="member-name">{member.name}</span>
+                                                    <span className="status-label">{status !== 'none' ? status : 'Non marqué'}</span>
+                                                </div>
+                                                <div className="attendance-actions">
+                                                    <button
+                                                        className={`action-btn present ${status === 'present' ? 'active' : ''}`}
+                                                        title="Présent"
+                                                        onClick={() => updateAttendance(currentActivity.id, memberId, 'present')}
+                                                    >
+                                                        <Check size={18} />
+                                                    </button>
+                                                    <button
+                                                        className={`action-btn absent ${status === 'absent' ? 'active' : ''}`}
+                                                        title="Absent"
+                                                        onClick={() => updateAttendance(currentActivity.id, memberId, 'absent')}
+                                                    >
+                                                        <X size={18} />
+                                                    </button>
+                                                    <button
+                                                        className={`action-btn abandon ${status === 'abandon' ? 'active' : ''}`}
+                                                        title="Retirer définitivement"
+                                                        onClick={() => updateAttendance(currentActivity.id, memberId, 'abandon')}
+                                                    >
+                                                        <LogOut size={18} />
+                                                    </button>
+                                                    <button
+                                                        className="action-btn remove"
+                                                        title="Désinscrire de cette séance"
+                                                        onClick={() => removeMemberFromActivity(memberId)}
+                                                    >
+                                                        <Trash size={16} />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })
+                                )}
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}
@@ -260,219 +417,6 @@ const AdminPage = () => {
                     </div>
                 </div>
             )}
-
-            <style jsx>{`
-        .adminpage {
-          padding: 8rem 2rem 5rem 2rem;
-          max-width: 1300px;
-          margin: 0 auto;
-        }
-
-        .admin-header {
-          text-align: center;
-          margin-bottom: 4rem;
-        }
-
-        .admin-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
-          gap: 2rem;
-        }
-
-        .admin-section {
-          height: fit-content;
-        }
-
-        .admin-section h2 {
-          display: flex;
-          align-items: center;
-          gap: 0.8rem;
-          font-size: 1.5rem;
-          margin-bottom: 2rem;
-        }
-
-        .icon-blue { color: #4facfe; }
-        .icon-cyan { color: #00f2fe; }
-
-        .upload-container {
-          display: flex;
-          flex-direction: column;
-          gap: 1rem;
-          margin-bottom: 2rem;
-        }
-
-        textarea, input {
-          background: rgba(0,0,0,0.2);
-          border: 1px solid var(--glass-border);
-          padding: 1rem;
-          border-radius: 12px;
-          color: white;
-          font-family: inherit;
-        }
-
-        textarea { height: 120px; resize: none; }
-
-        .members-list {
-          max-height: 250px;
-          overflow-y: auto;
-          background: rgba(0,0,0,0.1);
-          border-radius: 12px;
-          padding: 1rem;
-        }
-
-        .member-item {
-          display: flex;
-          justify-content: space-between;
-          padding: 0.8rem;
-          border-bottom: 1px solid var(--glass-border);
-          align-items: center;
-        }
-
-        .section-title-row {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 2rem;
-        }
-
-        .activities-list {
-          display: flex;
-          flex-direction: column;
-          gap: 1rem;
-        }
-
-        .activity-item {
-          background: var(--surface);
-          padding: 1.5rem;
-          border-radius: 15px;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          cursor: pointer;
-          transition: var(--transition);
-          border: 1px solid transparent;
-        }
-
-        .activity-item:hover {
-          background: var(--surface-hover);
-          border-color: var(--primary);
-        }
-
-        .activity-info h3 { font-size: 1.25rem; margin-bottom: 0.3rem; }
-        .activity-info span { font-size: 0.85rem; color: var(--text-dim); display: flex; align-items: center; gap: 0.5rem; }
-
-        .activity-stats {
-          background: var(--glass-bg);
-          padding: 0.5rem 1rem;
-          border-radius: 20px;
-          font-size: 0.9rem;
-          color: var(--primary);
-        }
-
-        /* Attendance View */
-        .attendance-view {
-          position: fixed;
-          top: 10%;
-          left: 50%;
-          transform: translateX(-50%);
-          width: 90%;
-          max-width: 800px;
-          max-height: 80%;
-          z-index: 1001;
-          background: var(--background);
-          padding: 2.5rem;
-          overflow-y: auto;
-        }
-
-        .attendance-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 2rem;
-        }
-
-        .attendance-list {
-          display: flex;
-          flex-direction: column;
-          gap: 0.5rem;
-        }
-
-        .attendance-row {
-          display: grid;
-          grid-template-columns: 1fr auto;
-          align-items: center;
-          padding: 1rem;
-          background: var(--surface);
-          border-radius: 10px;
-          gap: 2rem;
-        }
-
-        .header-row {
-          background: transparent;
-          font-weight: 700;
-          color: var(--text-dim);
-          font-size: 0.8rem;
-          text-transform: uppercase;
-        }
-
-        .action-labels {
-          display: flex;
-          gap: 2rem;
-          min-width: 200px;
-          justify-content: center;
-        }
-
-        .attendance-actions {
-          display: flex;
-          gap: 1.5rem;
-          min-width: 200px;
-          justify-content: center;
-        }
-
-        .btn-check {
-          width: 44px;
-          height: 44px;
-          border-radius: 50%;
-          background: var(--glass-bg);
-          color: var(--text-dim);
-          border: 1px solid var(--glass-border);
-          justify-content: center;
-        }
-
-        .btn-check:hover { background: var(--surface-hover); }
-
-        .active-present { background: rgba(34, 197, 94, 0.2); color: #22c55e; border-color: #22c55e; }
-        .active-absent { background: rgba(239, 68, 68, 0.2); color: #ef4444; border-color: #ef4444; }
-        .active-abandon { background: rgba(168, 85, 247, 0.2); color: #a855f7; border-color: #a855f7; }
-
-        /* Modals */
-        .modal-overlay {
-          position: fixed;
-          top: 0; left: 0; right: 0; bottom: 0;
-          background: rgba(0,0,0,0.8);
-          backdrop-filter: blur(5px);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          z-index: 1002;
-        }
-
-        .modal-content {
-          width: 90%;
-          max-width: 600px;
-        }
-
-        .form-group { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1.5rem; }
-        .form-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
-        .modal-actions { display: flex; justify-content: flex-end; gap: 1rem; margin-top: 1rem; }
-
-        .btn-icon {
-          padding: 0.4rem;
-          background: transparent;
-          color: var(--text-dim);
-        }
-        .btn-icon:hover { color: #ef4444; }
-      `}</style>
         </div>
     );
 };
