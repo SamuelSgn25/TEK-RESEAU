@@ -8,6 +8,7 @@ import AdminPage from './pages/AdminPage';
 import AboutPage from './pages/AboutPage';
 import ContactPage from './pages/ContactPage';
 import Login from './pages/Login';
+import SettingsPage from './pages/SettingsPage';
 import './App.css';
 
 function App() {
@@ -17,6 +18,7 @@ function App() {
 
   const handleLogout = () => {
     localStorage.removeItem('tek_reseau_auth');
+    localStorage.removeItem('tek_reseau_user');
     setIsAuthenticated(false);
   };
 
@@ -37,6 +39,10 @@ function App() {
             <Route
               path="/admin"
               element={isAuthenticated ? <AdminPage /> : <Navigate to="/login" />}
+            />
+            <Route
+              path="/settings"
+              element={isAuthenticated ? <SettingsPage /> : <Navigate to="/login" />}
             />
           </Routes>
         </main>
