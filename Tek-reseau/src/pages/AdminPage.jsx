@@ -30,6 +30,8 @@ const AdminPage = () => {
     const [rawUpload, setRawUpload] = useState('');
     const [isProcessingPdf, setIsProcessingPdf] = useState(false);
 
+    const [manualMemberName, setManualMemberName] = useState('');
+
     useEffect(() => {
         localStorage.setItem('tek_reseau_members', JSON.stringify(members));
     }, [members]);
@@ -50,6 +52,19 @@ const AdminPage = () => {
         setMembers([...members, ...newMembers]);
         setRawUpload('');
         alert('Membres ajoutés avec succès !');
+    };
+
+    const handleManualRegister = () => {
+        if (!manualMemberName.trim()) return;
+
+        // Add to general members list first
+        const newId = Math.random().toString(36).substr(2, 9);
+        const newMember = { id: newId, name: manualMemberName.trim() };
+        setMembers([...members, newMember]);
+
+        // Add to current activity
+        addMemberToActivity(newMember);
+        setManualMemberName('');
     };
 
     const handlePdfImport = async (e) => {
@@ -288,27 +303,46 @@ const AdminPage = () => {
                         <div className="attendance-registration">
                             <label>Inscrire un membre à cette séance :</label>
                             <div className="registration-controls">
-                                <select
-                                    className="member-select"
-                                    onChange={(e) => {
-                                        const member = members.find(m => m.id === e.target.value);
-                                        if (member) addMemberToActivity(member);
-                                        e.target.value = "";
-                                    }}
-                                    value=""
-                                >
-                                    <option value="" disabled>Sélectionner un membre...</option>
-                                    {members
-                                        .filter(m => !currentActivity.attendance[m.id])
-                                        .map(m => (
-                                            <option key={m.id} value={m.id}>{m.name}</option>
-                                        ))
-                                    }
-                                </select>
+                                <div className="select-box">
+                                    <p className="control-label">Choisir un membre existant</p>
+                                    <select
+                                        className="member-select"
+                                        onChange={(e) => {
+                                            const member = members.find(m => m.id === e.target.value);
+                                            if (member) addMemberToActivity(member);
+                                            e.target.value = "";
+                                        }}
+                                        value=""
+                                    >
+                                        <option value="" disabled>Sélectionner...</option>
+                                        {members
+                                            .filter(m => !currentActivity.attendance[m.id])
+                                            .map(m => (
+                                                <option key={m.id} value={m.id}>{m.name}</option>
+                                            ))
+                                        }
+                                    </select>
+                                </div>
+                                <div className="divider-vertical">OU</div>
+                                <div className="manual-box">
+                                    <p className="control-label">Inscription manuelle (Nouveau)</p>
+                                    <div className="manual-input-group">
+                                        <input
+                                            type="text"
+                                            value={manualMemberName}
+                                            onChange={(e) => setManualMemberName(e.target.value)}
+                                            placeholder="Nom Complet"
+                                            className="manual-input"
+                                        />
+                                        <button className="btn-primary btn-small" onClick={handleManualRegister}>
+                                            <Plus size={16} /> Ajouter
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
-                        <div className="attendance-list">
+                        <div className="attendance-list-container">
                             <div className="attendance-summary">
                                 <span className="stat-tag present">Présents: {Object.values(currentActivity.attendance).filter(v => v === 'present').length}</span>
                                 <span className="stat-tag absent">Absents: {Object.values(currentActivity.attendance).filter(v => v === 'absent').length}</span>
@@ -332,32 +366,28 @@ const AdminPage = () => {
                                                 </div>
                                                 <div className="attendance-actions">
                                                     <button
-                                                        className={`action-btn present ${status === 'present' ? 'active' : ''}`}
-                                                        title="Présent"
+                                                        className={`attendance-btn present ${status === 'present' ? 'active' : ''}`}
                                                         onClick={() => updateAttendance(currentActivity.id, memberId, 'present')}
                                                     >
-                                                        <Check size={18} />
+                                                        <Check size={16} /> <span>Présent</span>
                                                     </button>
                                                     <button
-                                                        className={`action-btn absent ${status === 'absent' ? 'active' : ''}`}
-                                                        title="Absent"
+                                                        className={`attendance-btn absent ${status === 'absent' ? 'active' : ''}`}
                                                         onClick={() => updateAttendance(currentActivity.id, memberId, 'absent')}
                                                     >
-                                                        <X size={18} />
+                                                        <X size={16} /> <span>Absent</span>
                                                     </button>
                                                     <button
-                                                        className={`action-btn abandon ${status === 'abandon' ? 'active' : ''}`}
-                                                        title="Retirer définitivement"
+                                                        className={`attendance-btn abandon ${status === 'abandon' ? 'active' : ''}`}
                                                         onClick={() => updateAttendance(currentActivity.id, memberId, 'abandon')}
                                                     >
-                                                        <LogOut size={18} />
+                                                        <LogOut size={16} /> <span>Abandon</span>
                                                     </button>
                                                     <button
-                                                        className="action-btn remove"
-                                                        title="Désinscrire de cette séance"
+                                                        className="attendance-btn remove"
                                                         onClick={() => removeMemberFromActivity(memberId)}
                                                     >
-                                                        <Trash size={16} />
+                                                        <Trash size={16} /> <span>Désinscrire</span>
                                                     </button>
                                                 </div>
                                             </div>
