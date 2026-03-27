@@ -1,70 +1,89 @@
-import React, { useState, useEffect } from 'react';
-import { Upload, Plus, Calendar, Clock, Check, X, LogOut, Users, Trash, Activity, FileText } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Upload, Plus, Calendar, Clock, Check, X, LogOut, Users, Trash, Activity, FileText, Search, ChevronRight } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 import './AdminPage.css';
 
-// Set up worker for PDF.js - using a CDN worker is often easier in these environments
+// Set up worker for PDF.js
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
-const AdminPage = () => {
-    const [members, setMembers] = useState(() => {
-        const saved = localStorage.getItem('tek_reseau_members');
-        return saved ? JSON.parse(saved) : [];
-    });
-
-    const [activities, setActivities] = useState(() => {
-        const saved = localStorage.getItem('tek_reseau_activities');
-        return saved ? JSON.parse(saved) : [];
-    });
-
+const AdminPage = ({ setAuth }) => {
+    const [activeTab, setActiveTab] = useState('members'); // members, activities, attendance
+    const [members, setMembers] = useState([]);
+    const [activities, setActivities] = useState([]);
     const [currentActivity, setCurrentActivity] = useState(null);
     const [showCreateModal, setShowCreateModal] = useState(false);
+    const [loading, setLoading] = useState(false);
+    
+    const [searchTerm, setSearchTerm] = useState('');
     const [newActivity, setNewActivity] = useState({
         name: '',
         date: '',
         startTime: '',
         endTime: '',
-        attendance: {}
+        description: ''
     });
 
     const [rawUpload, setRawUpload] = useState('');
     const [isProcessingPdf, setIsProcessingPdf] = useState(false);
-
     const [manualMemberName, setManualMemberName] = useState('');
 
-    useEffect(() => {
-        localStorage.setItem('tek_reseau_members', JSON.stringify(members));
-    }, [members]);
+    const token = localStorage.getItem('tek_reseau_token');
+    const apiBase = 'http://localhost:3000';
+
+    const fetchData = useCallback(async () => {
+        setLoading(true);
+        try {
+            const [mResp, aResp] = await Promise.all([
+                fetch(`${apiBase}/members`, { headers: { Authorization: `Bearer ${token}` } }),
+                fetch(`${apiBase}/activities`, { headers: { Authorization: `Bearer ${token}` } })
+            ]);
+            
+            if (mResp.ok) setMembers(await mResp.json());
+            if (aResp.ok) setActivities(await aResp.json());
+        } catch (err) {
+            console.error('Fetch error:', err);
+        } finally {
+            setLoading(false);
+        }
+    }, [token]);
 
     useEffect(() => {
-        localStorage.setItem('tek_reseau_activities', JSON.stringify(activities));
-    }, [activities]);
+        fetchData();
+    }, [fetchData]);
 
-    const handleUploadMembers = () => {
+    const handleLogout = () => {
+        localStorage.removeItem('tek_reseau_token');
+        localStorage.removeItem('tek_reseau_user');
+        setAuth(false);
+    };
+
+    const handleUploadMembers = async () => {
         if (!rawUpload.trim()) return;
 
         const lines = rawUpload.split('\n').filter(l => l.trim() !== '');
-        const newMembers = lines.map(line => ({
-            id: Math.random().toString(36).substr(2, 9),
-            name: line.trim()
+        const membersToImport = lines.map(line => ({
+            name: line.trim(),
+            status: 'ACTIVE'
         }));
 
-        setMembers([...members, ...newMembers]);
-        setRawUpload('');
-        alert('Membres ajoutés avec succès !');
-    };
+        try {
+            const resp = await fetch(`${apiBase}/members/import`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`
+                },
+                body: JSON.stringify({ members: membersToImport })
+            });
 
-    const handleManualRegister = () => {
-        if (!manualMemberName.trim()) return;
-
-        // Add to general members list first
-        const newId = Math.random().toString(36).substr(2, 9);
-        const newMember = { id: newId, name: manualMemberName.trim() };
-        setMembers([...members, newMember]);
-
-        // Add to current activity
-        addMemberToActivity(newMember);
-        setManualMemberName('');
+            if (resp.ok) {
+                setRawUpload('');
+                fetchData();
+                alert('Membres importés !');
+            }
+        } catch (err) {
+            alert('Erreur lors de l\'import.');
+        }
     };
 
     const handlePdfImport = async (e) => {
@@ -84,365 +103,294 @@ const AdminPage = () => {
                 fullText += pageText + '\n';
             }
 
-            // Cleanup text: remove multiple spaces, handle line breaks
-            // This is a naive implementation that assumes names are distinct or separated
             const potentialMembers = fullText
                 .split('\n')
                 .map(line => line.trim())
-                .filter(line => line.length > 3); // Basic filter for short/junk lines
+                .filter(line => line.length > 3 && !line.includes('Page'));
 
             setRawUpload(prev => prev + (prev ? '\n' : '') + potentialMembers.join('\n'));
-            alert('Texte extrait du PDF ! Vérifiez la liste ci-dessous avant d\'importer.');
         } catch (error) {
-            console.error('Erreur PDF:', error);
-            alert('Erreur lors de la lecture du PDF.');
+            alert('Erreur PDF.');
         } finally {
             setIsProcessingPdf(false);
             e.target.value = '';
         }
     };
 
-    const handleCreateActivity = () => {
+    const handleCreateActivity = async () => {
         if (!newActivity.name || !newActivity.date) {
-            alert('Veuillez remplir les informations de base.');
+            alert('Informations incomplètes.');
             return;
         }
 
-        const activity = {
-            ...newActivity,
-            id: Date.now(),
-            attendance: members.reduce((acc, member) => {
-                acc[member.id] = 'none'; // none, present, absent, abandon
-                return acc;
-            }, {})
-        };
-
-        setActivities([...activities, activity]);
-        setShowCreateModal(false);
-        setNewActivity({ name: '', date: '', startTime: '', endTime: '', attendance: {} });
-    };
-
-    const updateAttendance = (activityId, memberId, status) => {
-        if (status === 'abandon') {
-            const confirmAbandon = window.confirm(`Voulez-vous vraiment retirer définitivement ${members.find(m => m.id === memberId)?.name} de l'association ?`);
-            if (confirmAbandon) {
-                setMembers(members.filter(m => m.id !== memberId));
-                setActivities(activities.map(act => {
-                    const newAttendance = { ...act.attendance };
-                    delete newAttendance[memberId];
-                    return { ...act, attendance: newAttendance };
-                }));
-                if (currentActivity && currentActivity.id === activityId) {
-                    const newAttendance = { ...currentActivity.attendance };
-                    delete newAttendance[memberId];
-                    setCurrentActivity({ ...currentActivity, attendance: newAttendance });
-                }
-                return;
-            } else {
-                return;
-            }
-        }
-
-        const updatedActivities = activities.map(act => {
-            if (act.id === activityId) {
-                return {
-                    ...act,
-                    attendance: { ...act.attendance, [memberId]: status }
-                };
-            }
-            return act;
-        });
-
-        setActivities(updatedActivities);
-        if (currentActivity && currentActivity.id === activityId) {
-            setCurrentActivity({
-                ...currentActivity,
-                attendance: { ...currentActivity.attendance, [memberId]: status }
+        try {
+            const resp = await fetch(`${apiBase}/activities`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`
+                },
+                body: JSON.stringify(newActivity)
             });
+
+            if (resp.ok) {
+                setShowCreateModal(false);
+                setNewActivity({ name: '', date: '', startTime: '', endTime: '', description: '' });
+                fetchData();
+            }
+        } catch (err) {
+            alert('Erreur creation activité.');
         }
     };
 
-    const addMemberToActivity = (member) => {
-        if (!currentActivity) return;
-
-        const updatedActivities = activities.map(act => {
-            if (act.id === currentActivity.id) {
-                return {
-                    ...act,
-                    attendance: { ...act.attendance, [member.id]: 'none' }
-                };
+    const updateAttendance = async (activityId, memberId, status) => {
+        try {
+            const resp = await fetch(`${apiBase}/attendance`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`
+                },
+                body: JSON.stringify({ activityId, memberId, status })
+            });
+            
+            if (resp.ok) {
+                if (currentActivity && currentActivity.id === activityId) {
+                   const attResp = await fetch(`${apiBase}/attendance/activity/${activityId}`, {
+                       headers: { Authorization: `Bearer ${token}` }
+                   });
+                   const newAttendances = await attResp.json();
+                   setCurrentActivity({ ...currentActivity, attendances: newAttendances });
+                }
+                fetchData();
             }
-            return act;
-        });
-
-        setActivities(updatedActivities);
-        setCurrentActivity({
-            ...currentActivity,
-            attendance: { ...currentActivity.attendance, [member.id]: 'none' }
-        });
+        } catch (err) {
+            console.error(err);
+        }
     };
 
-    const removeMemberFromActivity = (memberId) => {
-        if (!currentActivity) return;
-
-        const updatedActivities = activities.map(act => {
-            if (act.id === currentActivity.id) {
-                const newAttendance = { ...act.attendance };
-                delete newAttendance[memberId];
-                return { ...act, attendance: newAttendance };
-            }
-            return act;
-        });
-
-        setActivities(updatedActivities);
-        const newAttendance = { ...currentActivity.attendance };
-        delete newAttendance[memberId];
-        setCurrentActivity({ ...currentActivity, attendance: newAttendance });
+    const openAttendance = async (act) => {
+        setLoading(true);
+        try {
+            const resp = await fetch(`${apiBase}/attendance/activity/${act.id}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const attendances = await resp.json();
+            setCurrentActivity({ ...act, attendances });
+            setActiveTab('attendance');
+        } catch (err) {
+            alert('Erreur chargement présences.');
+        } finally {
+            setLoading(false);
+        }
     };
+
+    const filteredMembers = members.filter(m => 
+        m.name.toLowerCase().includes(searchTerm.toLowerCase())
+    );
 
     return (
         <div className="adminpage animate-fade">
             <header className="admin-header">
-                <h1>Espace <span className="gradient-text">Administration</span></h1>
-                <p>Gérez les membres et suivez les présences aux activités.</p>
+                <div className="header-left">
+                    <h1>Espace <span className="gradient-text">Administration</span></h1>
+                    <p>Gestion centrale de l'association TEK-RESEAU</p>
+                </div>
+                <div className="header-tabs">
+                    <button className={activeTab === 'members' ? 'active' : ''} onClick={() => setActiveTab('members')}>
+                        <Users size={18} /> Membres
+                    </button>
+                    <button className={activeTab === 'activities' ? 'active' : ''} onClick={() => setActiveTab('activities')}>
+                        <Activity size={18} /> Activités
+                    </button>
+                    <button className={activeTab === 'attendance' ? 'active' : ''} onClick={() => {
+                        if (currentActivity) setActiveTab('attendance');
+                        else alert('Sélectionnez d\'abord une activité.');
+                    }}>
+                        <Check size={18} /> Pointage
+                    </button>
+                </div>
+                <button className="btn-logout" onClick={handleLogout}>
+                    <LogOut size={18} /> Quitter
+                </button>
             </header>
 
-            <div className="admin-grid">
-                {/* Members Management */}
-                <section className="glass-card admin-section">
-                    <h2><Users size={24} className="icon-blue" /> Gestion des Membres ({members.length})</h2>
-
-                    <div className="upload-container">
-                        <div className="upload-header">
-                            <label>Ajouter des membres</label>
-                            <div className="upload-actions">
-                                <label className="btn-secondary btn-small file-input-label">
-                                    <FileText size={16} />
-                                    {isProcessingPdf ? 'Extraction...' : 'PDF'}
-                                    <input
-                                        type="file"
-                                        accept=".pdf"
-                                        onChange={handlePdfImport}
-                                        style={{ display: 'none' }}
-                                        disabled={isProcessingPdf}
+            <main className="admin-main">
+                {activeTab === 'members' && (
+                    <div className="tab-content members-tab">
+                        <section className="glass-card members-management">
+                            <div className="card-header">
+                                <h2>Liste des Membres ({members.length})</h2>
+                                <div className="search-bar">
+                                    <Search size={18} />
+                                    <input 
+                                        type="text" 
+                                        placeholder="Rechercher un membre..." 
+                                        value={searchTerm}
+                                        onChange={(e) => setSearchTerm(e.target.value)}
                                     />
-                                </label>
-                            </div>
-                        </div>
-                        <textarea
-                            value={rawUpload}
-                            onChange={(e) => setRawUpload(e.target.value)}
-                            placeholder="Un nom par ligne..."
-                        />
-                        <button className="btn-primary" onClick={handleUploadMembers}>
-                            <Upload size={18} /> Importer la liste
-                        </button>
-                    </div>
-
-                    <div className="members-list">
-                        {members.length === 0 && <p className="empty-msg">Aucun membre.</p>}
-                        {members.map(m => (
-                            <div key={m.id} className="member-item">
-                                <span>{m.name}</span>
-                                <button className="btn-icon" onClick={() => {
-                                    if (window.confirm('Supprimer ce membre ?')) setMembers(members.filter(mem => mem.id !== m.id));
-                                }}>
-                                    <Trash size={14} />
-                                </button>
-                            </div>
-                        ))}
-                    </div>
-                </section>
-
-                {/* Activities Section */}
-                <section className="glass-card admin-section">
-                    <div className="section-title-row">
-                        <h2><Activity size={24} className="icon-cyan" /> Activités</h2>
-                        <button className="btn-primary" onClick={() => setShowCreateModal(true)}>
-                            <Plus size={18} /> Nouvelle
-                        </button>
-                    </div>
-
-                    <div className="activities-list">
-                        {activities.length === 0 && <p className="empty-msg">Aucune activité enregistrée.</p>}
-                        {activities.map(act => (
-                            <div key={act.id} className="activity-item" onClick={() => setCurrentActivity(act)}>
-                                <div className="activity-info">
-                                    <h3>{act.name}</h3>
-                                    <span><Calendar size={14} /> {act.date} | <Clock size={14} /> {act.startTime} - {act.endTime}</span>
                                 </div>
-                                <div className="activity-stats">
-                                    {Object.values(act.attendance).filter(v => v === 'present').length} Présents
-                                </div>
-                                <button className="btn-icon trash-activity" onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (window.confirm('Supprimer cette activité ?')) setActivities(activities.filter(a => a.id !== act.id));
-                                }}>
-                                    <Trash size={14} />
-                                </button>
                             </div>
-                        ))}
-                    </div>
-                </section>
-            </div>
+                            <div className="members-scroll">
+                                {filteredMembers.map(m => (
+                                    <div key={m.id} className="member-row">
+                                        <div className="member-info">
+                                            <span className="m-name">{m.name}</span>
+                                            <span className="m-id">{m.registrationNumber || 'No ID'}</span>
+                                        </div>
+                                        <div className="member-status-tag">{m.status}</div>
+                                        <button className="btn-icon" onClick={async () => {
+                                            if (confirm('Supprimer ce membre ?')) {
+                                                await fetch(`${apiBase}/members/${m.id}`, {
+                                                    method: 'DELETE',
+                                                    headers: { Authorization: `Bearer ${token}` }
+                                                });
+                                                fetchData();
+                                            }
+                                        }}>
+                                            <Trash size={14} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </section>
 
-            {/* Attendance View */}
-            {currentActivity && (
-                <div className="modal-overlay">
-                    <div className="attendance-view glass-card animate-fade">
-                        <div className="attendance-header">
-                            <div>
-                                <h3>{currentActivity.name}</h3>
-                                <p className="date-subtitle">{currentActivity.date} • {currentActivity.startTime} - {currentActivity.endTime}</p>
+                        <section className="glass-card member-import">
+                            <h2>Importation Liste</h2>
+                            <div className="import-box">
+                                <p>Collez une liste de noms ou importez un PDF.</p>
+                                <textarea 
+                                    value={rawUpload}
+                                    onChange={(e) => setRawUpload(e.target.value)}
+                                    placeholder="Jean Dupont\nAlice Martin..."
+                                />
+                                <div className="import-actions">
+                                    <label className="btn-secondary btn-small file-input-label">
+                                        <FileText size={16} /> 
+                                        {isProcessingPdf ? '...' : 'PDF'}
+                                        <input type="file" accept=".pdf" onChange={handlePdfImport} style={{display:'none'}} />
+                                    </label>
+                                    <button className="btn-primary" onClick={handleUploadMembers}>
+                                        <Upload size={18} /> Importer
+                                    </button>
+                                </div>
                             </div>
-                            <button className="btn-secondary" onClick={() => setCurrentActivity(null)}>
-                                <X size={18} /> Fermer
+                        </section>
+                    </div>
+                )}
+
+                {activeTab === 'activities' && (
+                    <div className="tab-content activities-tab">
+                        <div className="activities-header">
+                            <h2>Activités de l'Association</h2>
+                            <button className="btn-primary" onClick={() => setShowCreateModal(true)}>
+                                <Plus size={18} /> Nouvelle Séance
                             </button>
                         </div>
-
-                        <div className="attendance-registration">
-                            <label>Inscrire un membre à cette séance :</label>
-                            <div className="registration-controls">
-                                <div className="select-box">
-                                    <p className="control-label">Choisir un membre existant</p>
-                                    <select
-                                        className="member-select"
-                                        onChange={(e) => {
-                                            const member = members.find(m => m.id === e.target.value);
-                                            if (member) addMemberToActivity(member);
-                                            e.target.value = "";
-                                        }}
-                                        value=""
-                                    >
-                                        <option value="" disabled>Sélectionner...</option>
-                                        {members
-                                            .filter(m => !currentActivity.attendance[m.id])
-                                            .map(m => (
-                                                <option key={m.id} value={m.id}>{m.name}</option>
-                                            ))
-                                        }
-                                    </select>
-                                </div>
-                                <div className="divider-vertical">OU</div>
-                                <div className="manual-box">
-                                    <p className="control-label">Inscription manuelle (Nouveau)</p>
-                                    <div className="manual-input-group">
-                                        <input
-                                            type="text"
-                                            value={manualMemberName}
-                                            onChange={(e) => setManualMemberName(e.target.value)}
-                                            placeholder="Nom Complet"
-                                            className="manual-input"
-                                        />
-                                        <button className="btn-primary btn-small" onClick={handleManualRegister}>
-                                            <Plus size={16} /> Ajouter
+                        <div className="activities-grid">
+                            {activities.map(act => (
+                                <div key={act.id} className="glass-card activity-card">
+                                    <div className="act-header">
+                                        <h3>{act.name}</h3>
+                                        <span className="act-date">{new Date(act.date).toLocaleDateString()}</span>
+                                    </div>
+                                    <p className="act-time"><Clock size={14} /> {act.startTime} - {act.endTime}</p>
+                                    <div className="act-stats">
+                                        <div className="stat">
+                                            <span>Présents</span>
+                                            <strong>{act._count?.attendances || 0}</strong>
+                                        </div>
+                                    </div>
+                                    <div className="act-actions">
+                                        <button className="btn-accent" onClick={() => openAttendance(act)}>
+                                            Faire le Pointage <ChevronRight size={16} />
+                                        </button>
+                                        <button className="btn-icon-danger" onClick={async () => {
+                                            if (confirm('Supprimer ?')) {
+                                                await fetch(`${apiBase}/activities/${act.id}`, {
+                                                    method: 'DELETE',
+                                                    headers: { Authorization: `Bearer ${token}` }
+                                                });
+                                                fetchData();
+                                            }
+                                        }}>
+                                            <Trash size={16} />
                                         </button>
                                     </div>
                                 </div>
-                            </div>
-                        </div>
-
-                        <div className="attendance-list-container">
-                            <div className="attendance-summary">
-                                <span className="stat-tag present">Présents: {Object.values(currentActivity.attendance).filter(v => v === 'present').length}</span>
-                                <span className="stat-tag absent">Absents: {Object.values(currentActivity.attendance).filter(v => v === 'absent').length}</span>
-                                <span className="stat-tag total">Total inscrits: {Object.keys(currentActivity.attendance).length}</span>
-                            </div>
-
-                            <div className="attendance-scroll-area">
-                                {Object.keys(currentActivity.attendance).length === 0 ? (
-                                    <p className="empty-msg">Personne n'est inscrit à cette séance.</p>
-                                ) : (
-                                    Object.keys(currentActivity.attendance).map(memberId => {
-                                        const member = members.find(m => m.id === memberId);
-                                        if (!member) return null;
-                                        const status = currentActivity.attendance[memberId];
-
-                                        return (
-                                            <div key={memberId} className={`attendance-card ${status}`}>
-                                                <div className="member-info">
-                                                    <span className="member-name">{member.name}</span>
-                                                    <span className="status-label">{status !== 'none' ? status : 'Non marqué'}</span>
-                                                </div>
-                                                <div className="attendance-actions">
-                                                    <button
-                                                        className={`attendance-btn present ${status === 'present' ? 'active' : ''}`}
-                                                        onClick={() => updateAttendance(currentActivity.id, memberId, 'present')}
-                                                    >
-                                                        <Check size={16} /> <span>Présent</span>
-                                                    </button>
-                                                    <button
-                                                        className={`attendance-btn absent ${status === 'absent' ? 'active' : ''}`}
-                                                        onClick={() => updateAttendance(currentActivity.id, memberId, 'absent')}
-                                                    >
-                                                        <X size={16} /> <span>Absent</span>
-                                                    </button>
-                                                    <button
-                                                        className={`attendance-btn abandon ${status === 'abandon' ? 'active' : ''}`}
-                                                        onClick={() => updateAttendance(currentActivity.id, memberId, 'abandon')}
-                                                    >
-                                                        <LogOut size={16} /> <span>Abandon</span>
-                                                    </button>
-                                                    <button
-                                                        className="attendance-btn remove"
-                                                        onClick={() => removeMemberFromActivity(memberId)}
-                                                    >
-                                                        <Trash size={16} /> <span>Désinscrire</span>
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        );
-                                    })
-                                )}
-                            </div>
+                            ))}
                         </div>
                     </div>
-                </div>
-            )}
+                )}
 
-            {/* Create Activity Modal */}
+                {activeTab === 'attendance' && currentActivity && (
+                    <div className="tab-content attendance-tab">
+                        <section className="attendance-control glass-card">
+                            <div className="att-info">
+                                <button className="btn-back" onClick={() => setActiveTab('activities')}>← Retour</button>
+                                <h2>Pointage : {currentActivity.name}</h2>
+                                <p>{new Date(currentActivity.date).toLocaleDateString()} | {currentActivity.startTime} - {currentActivity.endTime}</p>
+                            </div>
+                            
+                            <div className="attendance-search">
+                                <Search size={20} />
+                                <input 
+                                    type="text" 
+                                    placeholder="Chercher un membre pour marquer..." 
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                />
+                            </div>
+
+                            <div className="attendance-list">
+                                {filteredMembers.map(m => {
+                                    const attendance = currentActivity.attendances?.find(a => a.memberId === m.id);
+                                    const status = attendance?.status || 'NONE';
+                                    
+                                    return (
+                                        <div key={m.id} className={`att-row ${status.toLowerCase()}`}>
+                                            <span className="m-name">{m.name}</span>
+                                            <div className="att-btns">
+                                                <button 
+                                                    className={`btn-att present ${status === 'PRESENT' ? 'active' : ''}`}
+                                                    onClick={() => updateAttendance(currentActivity.id, m.id, 'PRESENT')}
+                                                >
+                                                    <Check size={16} /> Présent
+                                                </button>
+                                                <button 
+                                                    className={`btn-att absent ${status === 'ABSENT' ? 'active' : ''}`}
+                                                    onClick={() => updateAttendance(currentActivity.id, m.id, 'ABSENT')}
+                                                >
+                                                    <X size={16} /> Absent
+                                                </button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </section>
+                    </div>
+                )}
+            </main>
+
             {showCreateModal && (
                 <div className="modal-overlay">
-                    <div className="glass-card modal-content animate-fade">
-                        <h2>Créer une Activité</h2>
-                        <div className="form-group">
-                            <label>Nom de l'activité</label>
-                            <input
-                                type="text"
-                                value={newActivity.name}
-                                onChange={e => setNewActivity({ ...newActivity, name: e.target.value })}
-                                placeholder="Ex: TP Sockets C"
-                            />
-                        </div>
+                    <div className="glass-card modal-content">
+                        <h2>Nouvelle Activité</h2>
+                        <input 
+                            type="text" 
+                            placeholder="Nom de l'activité" 
+                            value={newActivity.name}
+                            onChange={e => setNewActivity({...newActivity, name: e.target.value})}
+                        />
                         <div className="form-row">
-                            <div className="form-group">
-                                <label>Date</label>
-                                <input
-                                    type="date"
-                                    value={newActivity.date}
-                                    onChange={e => setNewActivity({ ...newActivity, date: e.target.value })}
-                                />
-                            </div>
-                            <div className="form-group">
-                                <label>Début</label>
-                                <input
-                                    type="time"
-                                    value={newActivity.startTime}
-                                    onChange={e => setNewActivity({ ...newActivity, startTime: e.target.value })}
-                                />
-                            </div>
-                            <div className="form-group">
-                                <label>Fin</label>
-                                <input
-                                    type="time"
-                                    value={newActivity.endTime}
-                                    onChange={e => setNewActivity({ ...newActivity, endTime: e.target.value })}
-                                />
-                            </div>
+                            <input type="date" value={newActivity.date} onChange={e => setNewActivity({...newActivity, date: e.target.value})} />
+                            <input type="time" value={newActivity.startTime} onChange={e => setNewActivity({...newActivity, startTime: e.target.value})} />
+                            <input type="time" value={newActivity.endTime} onChange={e => setNewActivity({...newActivity, endTime: e.target.value})} />
                         </div>
-                        <div className="modal-actions">
+                        <div className="modal-btns">
                             <button className="btn-secondary" onClick={() => setShowCreateModal(false)}>Annuler</button>
-                            <button className="btn-primary" onClick={handleCreateActivity}>Confirmer</button>
+                            <button className="btn-primary" onClick={handleCreateActivity}>Créer</button>
                         </div>
                     </div>
                 </div>
