@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { Network, Users, ShieldCheck, Home, Info, Mail, LogOut, User, Settings, ChevronDown } from 'lucide-react';
 import './Navbar.css';
 
-const Navbar = ({ isAuthenticated, onLogout }) => {
+const Navbar = ({ isAuthenticated, setIsAuthenticated }) => {
   const location = useLocation();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [userData, setUserData] = useState(null);
@@ -14,6 +14,13 @@ const Navbar = ({ isAuthenticated, onLogout }) => {
       setUserData(user ? JSON.parse(user) : null);
     }
   }, [isAuthenticated]);
+
+  const handleLogout = () => {
+    localStorage.removeItem('tek_reseau_token');
+    localStorage.removeItem('tek_reseau_user');
+    setIsAuthenticated(false);
+    setShowProfileMenu(false);
+  };
 
   const isActive = (path) => location.pathname === path;
 
@@ -74,10 +81,7 @@ const Navbar = ({ isAuthenticated, onLogout }) => {
                   </Link>
                   <button
                     className="dropdown-item logout-item"
-                    onClick={() => {
-                      onLogout();
-                      setShowProfileMenu(false);
-                    }}
+                    onClick={handleLogout}
                   >
                     <LogOut size={16} />
                     Déconnexion
