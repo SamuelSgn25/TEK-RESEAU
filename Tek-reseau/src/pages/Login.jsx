@@ -8,20 +8,28 @@ const Login = ({ setAuth }) => {
   const [password, setPassword] = useState('');
   const navigate = useNavigate();
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
-    // Simplified logic for simulation, but uses email as requested
-    if (email && password === 'tekreseau2025') {
-      localStorage.setItem('tek_reseau_auth', 'true');
-      localStorage.setItem('tek_reseau_user', JSON.stringify({
-        email: email,
-        name: email.split('@')[0],
-        role: 'Administrateur'
-      }));
-      setAuth(true);
-      navigate('/admin');
-    } else {
-      alert('Identifiants invalides (Le mot de passe par défaut est tekreseau2025)');
+    try {
+      const resp = await fetch('http://localhost:3000/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      
+      const data = await resp.json();
+      
+      if (resp.ok) {
+        localStorage.setItem('tek_reseau_token', data.access_token);
+        localStorage.setItem('tek_reseau_user', JSON.stringify(data.user));
+        setAuth(true);
+        navigate('/admin');
+      } else {
+        alert(data.message || 'Identifiants invalides.');
+      }
+    } catch (err) {
+      console.error('Login error:', err);
+      alert('Erreur de connexion au serveur.');
     }
   };
 
