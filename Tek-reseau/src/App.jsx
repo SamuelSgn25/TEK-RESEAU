@@ -13,19 +13,13 @@ import './App.css';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return localStorage.getItem('tek_reseau_auth') === 'true';
+    return !!localStorage.getItem('tek_reseau_token');
   });
-
-  const handleLogout = () => {
-    localStorage.removeItem('tek_reseau_auth');
-    localStorage.removeItem('tek_reseau_user');
-    setIsAuthenticated(false);
-  };
 
   return (
     <Router>
       <div className="app-main">
-        <Navbar isAuthenticated={isAuthenticated} onLogout={handleLogout} />
+        <Navbar isAuthenticated={isAuthenticated} setIsAuthenticated={setIsAuthenticated} />
         <main>
           <Routes>
             <Route path="/" element={<HomePage />} />
@@ -38,11 +32,11 @@ function App() {
             />
             <Route
               path="/admin"
-              element={isAuthenticated ? <AdminPage /> : <Navigate to="/login" />}
+              element={isAuthenticated ? <AdminPage setAuth={setIsAuthenticated} /> : <Navigate to="/login" />}
             />
             <Route
               path="/settings"
-              element={isAuthenticated ? <SettingsPage /> : <Navigate to="/login" />}
+              element={isAuthenticated ? <SettingsPage setAuth={setIsAuthenticated} /> : <Navigate to="/login" />}
             />
           </Routes>
         </main>
