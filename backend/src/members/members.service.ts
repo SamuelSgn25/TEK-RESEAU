@@ -35,7 +35,7 @@ export class MembersService {
   }
 
   async bulkImport(members: any[]) {
-    const results = [];
+    const results: any[] = [];
     for (const member of members) {
       try {
         const created = await this.prisma.member.upsert({
