@@ -5,6 +5,12 @@ import './BoardPage.css';
 const BoardPage = () => {
   const boardMembers = [
     {
+      role: 'Présidente Fondatrice, Autorité Suprême',
+      name: 'Hodavia BANGBOLA',
+      badge: 'Visionary',
+      desc: 'Inspiratrice et pilier central de Tek-Reseau, garante de la vision et de la pérennité de l\'association.'
+    },
+    {
       role: 'Président',
       name: 'Joachim GOEH-AKUE',
       badge: 'Leadership',
